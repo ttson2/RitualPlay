@@ -1,6 +1,9 @@
 # WARNING - MALWARE - DO NOT CLONE THIS REPO
 # ❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌
 
+https://www.youtube.com/watch?v=VA7PsdI0zs8
+
+
 below is a security analysis done by clause code. 
 reference https://x.com/adibhanna/status/2046988777789555191
 repo: https://github.com/ritualPlay-Net/RitualPlay/
